@@ -1,0 +1,6 @@
+module presutto
+typeinfo apppresutto.qmltypes
+prefer :/qt/qml/presutto/
+Main 254.0 Main.qml
+depends QtQuick
+
