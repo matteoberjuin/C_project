@@ -1,0 +1,218 @@
+#include "Particle.h"
+#include "Vec2.h"
+#include "Context.h"
+
+Context::Context() : gravity(0.f,0.f){}
+
+
+void Context::updatePhysicalSystem(float dt)
+{
+    applyExternalForce(dt);
+    dampVelocities(dt);
+    updateExpectedPosition(dt);
+    addStaticContactConstraints(dt);
+    addDynamicContactConstraints(dt);
+    for (int i = 0; i < 5; ++i)
+        projectConstraints();
+    updateVelocityAndPosition(dt);
+    deleteContactConstraints();
+}
+
+void Context::applyExternalForce(float dt) {
+    for (Particle& p  : particles_){
+        p.velocity = p.velocity + dt*gravity;}
+}
+
+void Context::dampVelocities(float dt) {}
+
+void Context::updateExpectedPosition(float dt) {
+    for (Particle& p : particles_)
+    {
+        p.predictedPosition = p.position + dt * p.velocity;
+    }
+
+}
+
+void Context::addParticle(const Particle& p){
+    particles_.push_back(p);
+}
+
+const std::vector<Particle>& Context::particles() const
+{
+    return particles_;
+}
+
+void Context::addStaticContactConstraints(float)
+{
+    staticConstraints_.clear();
+
+    const float groundY = bottomY_;
+    const float topY    = topY_;
+    const float leftX   = leftX_;
+    const float rightX  = rightX_;
+
+    const Vec2 nBottom(0.f,  1.f);
+    const Vec2 nTop   (0.f, -1.f);
+    const Vec2 nLeft  (1.f,  0.f);
+    const Vec2 nRight (-1.f, 0.f);
+
+    for (int i = 0; i < (int)particles_.size(); ++i)
+    {
+        Particle& p = particles_[i];
+
+        const float d = p.predictedPosition.y - p.radius; // bas de la sphère
+        const float t = p.predictedPosition.y + p.radius; // haut
+        const float l = p.predictedPosition.x - p.radius; // gauche
+        const float r = p.predictedPosition.x + p.radius; // droite
+
+        if (d < groundY)
+        {
+            StaticConstraint c;
+            c.p = i;
+            c.normal = nBottom;
+            c.penetration = groundY - d;   // profondeur
+            staticConstraints_.push_back(c);
+        }
+
+        if (t > topY)
+        {
+            StaticConstraint c;
+            c.p = i;
+            c.normal = nTop;
+            c.penetration = t - topY;
+            staticConstraints_.push_back(c);
+        }
+
+        if (l < leftX)
+        {
+            StaticConstraint c;
+            c.p = i;
+            c.normal = nLeft;
+            c.penetration = leftX - l;
+            staticConstraints_.push_back(c);
+        }
+
+        if (r > rightX)
+        {
+            StaticConstraint c;
+            c.p = i;
+            c.normal = nRight;
+            c.penetration = r - rightX;
+            staticConstraints_.push_back(c);
+        }
+    }
+}
+
+static void enforceStaticConstraint(const StaticConstraint& c, Particle& p)
+{
+    p.predictedPosition += c.normal * c.penetration;
+
+    p.mammamia = true;
+    p.contactNormal = c.normal;
+}
+
+
+void Context::addDynamicContactConstraints(float)
+{
+    dynamicConstraints_.clear();
+
+    for (size_t i = 0; i < particles_.size(); ++i)
+    {
+        for (size_t j = i + 1; j < particles_.size(); ++j)
+        {
+            Particle& p1 = particles_[i];
+            Particle& p2 = particles_[j];
+
+            Vec2 d = p2.predictedPosition - p1.predictedPosition;
+            float dist = d.length();
+            float minDist = p1.radius + p2.radius;
+
+            if (dist < minDist && dist > 1e-6f)
+            {
+                DynamicConstraint c;
+                c.p1 = static_cast<int>(i);
+                c.p2 = static_cast<int>(j);
+                c.normal = d / dist;
+                c.penetration = minDist - dist;
+                dynamicConstraints_.push_back(c);
+            }
+        }
+    }
+}
+
+
+static void enforceDynamicConstraint(const DynamicConstraint& c,
+                                     Particle& p1,
+                                     Particle& p2)
+{
+    float w1 = 1.f / p1.mass;
+    float w2 = 1.f / p2.mass;
+    float wSum = w1 + w2;
+
+    Vec2 correction = c.normal * c.penetration;
+
+    p1.predictedPosition -= correction * (w1 / wSum);
+    p2.predictedPosition += correction * (w2 / wSum);
+}
+
+void Context::projectConstraints()
+{
+    // Contraintes statiques
+    for (const auto& c : staticConstraints_)
+    {
+        enforceStaticConstraint(c, particles_[c.p]);
+    }
+
+    // Contraintes dynamiques
+    for (const auto& c : dynamicConstraints_)
+    {
+        enforceDynamicConstraint(c,
+                                 particles_[c.p1],
+                                 particles_[c.p2]);
+    }
+}
+
+void Context::deleteContactConstraints()
+{
+    staticConstraints_.clear();
+    dynamicConstraints_.clear();
+}
+
+void Context::updateVelocityAndPosition(float dt)
+{
+    const float restitution = 0.9f; // 1 rebond parfait 0 inélastique
+
+    for (Particle& p : particles_)
+    {
+        const Vec2 oldPosition = p.position;
+
+        p.position = p.predictedPosition;
+
+        // vitesse déduite du déplacement après projection PBD
+        p.velocity = (p.position - oldPosition) * (1.f / dt);
+
+        // rebond sur mur si contact statique ce pas de temps
+        if (p.mammamia)
+        {
+            const Vec2 n = p.contactNormal;
+
+            const float vn = p.velocity.dot(n); // nécessite dot dans Vec2
+            if (vn < 0.f)
+            {
+                // réflexion avec restitution
+                p.velocity = p.velocity - (1.f + restitution) * vn * n;
+            }
+
+            p.mammamia = false;
+            p.contactNormal = Vec2(0.f, 0.f);
+        }
+    }
+}
+
+void Context::setWorldBounds(float leftX, float rightX, float bottomY, float topY)
+{
+    leftX_ = leftX;
+    rightX_ = rightX;
+    bottomY_ = bottomY;
+    topY_ = topY;
+}
