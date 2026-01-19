@@ -1,3 +1,3 @@
 # C_project
 
-ya tout sauf l'api que je vais rebosser ce soir mais normazlement elle marche deja un peu
+version_finale contient tout les fichers a utilise pour le projet 
